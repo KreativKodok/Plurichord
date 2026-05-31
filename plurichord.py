@@ -25,7 +25,6 @@ import lvgl as lv
 
 
 
-
 default_style = lv.style_t()
 default_style.set_bg_color(lv.color_white())
 default_style.set_border_width(0)
@@ -33,6 +32,18 @@ default_style.set_pad_all(0)
 default_style.set_radius(0)
 default_style.set_pad_row(0)
 default_style.set_pad_column(0)
+
+def get_global_pos(obj):
+    x = obj.get_x()
+    y = obj.get_y()
+    parent = obj.get_parent()
+    while parent:
+        x += parent.get_x()
+        y += parent.get_y()
+        parent = parent.get_parent()
+    return (x, y)
+    
+    
 
 
 
@@ -45,6 +56,10 @@ length = 1000
 strum_mode = 0
 current_chord_notes = None
 midi_out = False
+
+active = True
+current_note = None
+
 def set_next_chord_cb(chord):
     
     global current_chord_notes
@@ -52,14 +67,23 @@ def set_next_chord_cb(chord):
 
 
 def activate(screen):
+    global active
+    active = True
     app.synth = midi.config.get_synth(channel=1)
     return
     
 def deactivate(screen):
+    global active
+    active = False
+    return
+
+def remove_last_note():
+    app.synth.note_off(current_note, 0)
     return
 
 def quit(screen):
     app.synth.all_notes_off()
+    if (current_note is not None): remove_last_note()
     for i in range(128):
         app.synth.note_off(i, 0)
 
@@ -68,11 +92,7 @@ def set_midi_state(state):
     global midi_out
     midi_out = state
     
-current_note = None
 
-def remove_last_note():
-    app.synth.note_off(current_note, 0)
-    return
 
 def delayed_off(note):
     app.synth.note_off(note, 0)
@@ -96,9 +116,9 @@ def add_note(note):
 
 old_value = -1
 def strum_changed(e):
+    """
     global old_value
     global strum_mode
-    
     value = math.floor(remap(e.get_target_obj().get_value(), 0, 100, 0, 12))
     if value != old_value:
         
@@ -115,8 +135,55 @@ def strum_changed(e):
     	add_note(next_note)
         
     old_value = value
+    """
     
     
+    
+strum_zone = []
+strum_pos = None
+strum_size = None
+    
+def touch_cb(up):
+    if(strum_zone is None): return
+
+    global strum_pos
+    global strum_size
+    
+    if(strum_pos is None): strum_pos = get_global_pos(strum_zone)
+    if(strum_size is None): strum_size =  (strum_zone.get_width(), strum_zone.get_height())
+    curs = tulip.touch()
+    
+    t = ((curs[0]-strum_pos[0])/strum_size[0], (curs[1]-strum_pos[1])/strum_size[1])
+    
+    if(not active or up or t[0] < 0 or t[0] > 1 or t[1] < 0 or t[1] > 1):
+        global current_note
+        if (current_note is not None):
+            remove_last_note()
+            current_note = None
+            
+        return
+    
+    
+    global old_value
+    global strum_mode
+    value = math.floor(remap(t[1], 1, 0, 0, 12))
+    if value != old_value:
+        
+        if strum_mode == 1: # up_down
+            index = abs(value-6)+6
+        elif strum_mode == 2: # random
+            index = random.choice(range(12))
+        else:
+            index = value
+        
+        octave = math.floor(index / len(current_chord_notes))
+        norm_index = math.floor(index % len(current_chord_notes))
+        next_note = current_chord_notes[norm_index]+(octave+1)*12
+    	add_note(next_note)
+        
+    old_value = value
+    
+
     
 def run(screen):
     
@@ -129,10 +196,16 @@ def run(screen):
     global app
     global window
     global synth
+    global active
     
     app = screen
     
     app.synth = midi.config.get_synth(channel=1)
+    
+    global active
+    active = True
+    
+    tulip.touch_callback(touch_cb)
     
     
     app.quit_callback = quit;
@@ -193,33 +266,33 @@ def run(screen):
     strum_container.center()
     
    
-    
+    global strum_zone
     # strum slider
-    strum_slider = lv.slider(strum_container)
-    strum_slider.add_style(default_style, lv.PART.MAIN)
-    strum_slider.add_style(default_style, lv.PART.INDICATOR)
-    strum_slider.add_style(default_style, lv.PART.KNOB)
     
-    strum_slider.set_size(strum_slider.get_parent().get_width(), strum_slider.get_parent().get_parent().get_height()-100)
+    strum_zone = lv.slider(strum_container)
+    strum_zone.add_style(default_style, lv.PART.MAIN)
+    strum_zone.add_style(default_style, lv.PART.INDICATOR)
+    strum_zone.add_style(default_style, lv.PART.KNOB)
     
-    strum_slider.set_style_bg_color(lv.palette_darken(lv.PALETTE.YELLOW, 2), lv.PART.INDICATOR)
-    strum_slider.set_style_bg_color(lv.palette_darken(lv.PALETTE.YELLOW, 2), lv.PART.MAIN)
-    strum_slider.set_style_bg_opa(lv.OPA.COVER, lv.PART.MAIN)
-    strum_slider.set_style_bg_color(lv.palette_darken(lv.PALETTE.YELLOW, 2), lv.PART.KNOB)
-    strum_slider.center()
-    strum_slider.add_event_cb(lambda e: strum_changed(e), lv.EVENT.VALUE_CHANGED, None)
-    strum_slider.add_event_cb(lambda e: remove_last_note(), lv.EVENT.RELEASED, None)
-    strum_slider.set_flex_flow(lv.FLEX_FLOW.COLUMN)
-    strum_slider.set_style_pad_row(5, 0)
-    strum_slider.set_flex_align(lv.FLEX_ALIGN.CENTER,lv.FLEX_ALIGN.CENTER,lv.FLEX_ALIGN.CENTER)
+    strum_zone.set_size(strum_zone.get_parent().get_width(), strum_zone.get_parent().get_parent().get_height()-100)
+    
+    strum_zone.set_style_bg_color(lv.palette_darken(lv.PALETTE.YELLOW, 2), lv.PART.MAIN)
+    strum_zone.set_style_bg_color(lv.palette_darken(lv.PALETTE.YELLOW, 2), lv.PART.INDICATOR)
+    strum_zone.set_style_bg_color(lv.palette_darken(lv.PALETTE.YELLOW, 2), lv.PART.KNOB)
+    strum_zone.center()
+    strum_zone.set_flex_flow(lv.FLEX_FLOW.COLUMN)
+    strum_zone.set_style_pad_row(5, 0)
+    strum_zone.set_flex_align(lv.FLEX_ALIGN.CENTER,lv.FLEX_ALIGN.CENTER,lv.FLEX_ALIGN.CENTER)
+    
+    strum_zone.remove_flag(lv.obj.FLAG.CLICKABLE)
     for b in range(20):
-        bar = lv.obj(strum_slider)
+        bar = lv.obj(strum_zone)
         bar.add_style(default_style, 0)
         bar.set_style_bg_color(lv.palette_darken(lv.PALETTE.YELLOW, 4),0)
         bar.set_width(strum_container.get_width()-10)
         bar.set_flex_grow(1)
         bar.remove_flag(lv.obj.FLAG.CLICKABLE)
-    
+
   
     # left area sections
     top_section = lv.obj(chord_choice_area)
@@ -293,6 +366,7 @@ def run(screen):
     
     set_next_chord_cb("C:maj")
     chords = ["Db","Ab","Eb","Bb","F","C","G","D","A","E","B","F#"]
+    
     
     def populate(container, chords, mod):
         for key in chords:
